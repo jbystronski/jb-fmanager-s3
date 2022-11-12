@@ -44,7 +44,7 @@ app.get(`${prefix}/map`, (req, res, next) =>
 
 <strong>[get] create_folder</strong>
 
-<span>Creates new directory in the specified path</span>
+<span>Creates a new directory object in the specified path</span>
 
 ```js
 app.get(`${prefix}/create_folder`, ({ query }, res, next) =>
@@ -57,7 +57,7 @@ app.get(`${prefix}/create_folder`, ({ query }, res, next) =>
 
 <strong>[get] rename</strong>
 
-<span>Renames am object and all objects down in hierarchy</span>
+<span>Renames an object and all objects down in hierarchy</span>
 
 ```js
 app.get(`${prefix}/rename`, ({ query }, res, next) =>
