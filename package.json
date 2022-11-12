@@ -1,0 +1,14 @@
+{
+  "name": "@jb_fmanager/s3",
+  "version": "0.0.1",
+  "description": "s3 service package for @jb_fmanager",
+  "repository": "jbystronski/jb-fmanager-s3",
+  "main": "index.js",
+  "author": "Jakub Bystroński",
+  "license": "MIT",
+  "dependencies": {
+    "aws-sdk": "^2.1251.0",
+    "busboy": "^1.6.0"
+  }
+  "keywords": ["s3", "cloud storage", "media","file manager","react","file browser"]
+}
