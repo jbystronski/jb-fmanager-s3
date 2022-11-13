@@ -1,6 +1,6 @@
 {
   "name": "@jb_fmanager/s3",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "s3 service package for @jb_fmanager",
   "repository": "jbystronski/jb-fmanager-s3",
   "main": "index.js",
