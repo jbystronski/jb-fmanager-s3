@@ -40,7 +40,6 @@ const jbfm_s3 = ({
     return new Promise((resolve, reject) => {
       try {
         const { destination, max_size } = req.query;
-        console.log("orig", keepOriginalName);
 
         let filesArray = [];
         let failed = [];
@@ -72,14 +71,13 @@ const jbfm_s3 = ({
           });
 
           stream.on("end", function () {
-            console.log("File [" + filename + "] Finished");
+            console.log("File [" + filename + "] data collected");
           });
         });
         bb.on("finish", function () {
           const dest = parseKey(destination);
 
           let queue = filesArray.length;
-          console.log("queue  on start", queue);
 
           filesArray.forEach((f, index) => {
             const fName = keepOriginalName
@@ -187,7 +185,6 @@ const jbfm_s3 = ({
         Bucket: bucketName,
         Delete: {
           Objects: keysArray.map((key) => {
-            console.log("deleting", key);
             return {
               Key: key,
             };
@@ -199,8 +196,6 @@ const jbfm_s3 = ({
           console.error("Error while deleting object");
           throw err;
         }
-
-        console.log("Deleted object ", res);
       }
     );
 
@@ -210,9 +205,6 @@ const jbfm_s3 = ({
 
       try {
         for (const [index, val] of oldKeys.entries()) {
-          console.log("Processing object copy", val);
-          console.log("index", index);
-
           s3.copyObject(
             {
               Bucket: bucketName,
@@ -228,9 +220,9 @@ const jbfm_s3 = ({
                 );
                 throw err;
               }
-              console.log("object copied to ", parseKey(newKeys[index]));
+
               count -= 1;
-              console.log("objects left", count);
+
               if (count === 0) {
                 resolve(oldKeys);
               }
@@ -262,29 +254,26 @@ const jbfm_s3 = ({
   const move = async (target, files, keepOrigin = false) => {
     const oldKeys = await getKeyWithSubkeys(files);
 
-    let prefix, marker;
+    let marker;
 
     const newKeys = oldKeys.map((k, ind) => {
-      if (
-        prefix === undefined ||
-        marker === undefined ||
-        !k.slice(prefix.length + 1).startsWith(marker)
-      ) {
-        marker = k.split("/").length === 1 ? k : k.split("/").reverse()[0];
-        prefix =
-          k.split("/").length === 1 ? "" : k.slice(0, k.lastIndexOf("/"));
+      const parts = k.split("/");
+
+      if (parts.length === 1 && marker !== parts[0]) {
+        marker = parts[0];
       }
 
-      return parseKey(target) + "/" + normalize(k.slice(prefix.length));
+      if (parts.length > 1 && marker !== parts[0]) {
+        marker = parts[parts.length - 1];
+        k = marker;
+      }
+
+      return parseKey(target) + "/" + normalize(k);
     });
-    console.log("old keys", oldKeys);
-    console.log("new keys", newKeys);
 
     const keysToDelete = await s3copy(newKeys, oldKeys);
 
     if (keepOrigin === false) {
-      console.log("keys to delete", keysToDelete);
-
       await s3delete(keysToDelete);
     }
   };
