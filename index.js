@@ -1,6 +1,9 @@
 const AWS = require("aws-sdk");
 const { Tree } = require("./lib/Tree");
 const busboy = require("busboy");
+const crypto = require("crypto");
+const path = require("path");
+const formatDate = require("./lib/formatDate");
 
 const jbfm_s3 = ({
   accessKeyId,
@@ -27,43 +30,91 @@ const jbfm_s3 = ({
         Bucket: bucketName,
         Key: normalize(`${getS3Key(key)}/${name}`),
       })
-      .promise()
-      .catch(console.error);
+      .promise();
 
-  const upload = async (req, res, target, max_size) => {
-    let filesArray = [];
+  const upload = async (
+    req,
+    res,
+    { keepOriginalName = false, overrideMaxSize }
+  ) => {
+    return new Promise((resolve, reject) => {
+      try {
+        const { destination, max_size } = req.query;
+        console.log("orig", keepOriginalName);
 
-    let bb = busboy({ headers: req.headers });
-    bb.on("file", function (fieldname, stream, info) {
-      const { filename } = info;
+        let filesArray = [];
+        let failed = [];
 
-      filesArray.push({
-        filename,
-        chunks: [],
-      });
+        let bb = busboy({
+          headers: req.headers,
+          limits: {
+            fileSize: parseInt(overrideMaxSize || max_size || 1024 * 1024 * 10),
+          },
+        });
+        bb.on("file", function (fieldname, stream, info) {
+          const { filename, encoding, mimeType } = info;
 
-      stream.on("data", function (data) {
-        filesArray[filesArray.length - 1]["chunks"].push(data);
-      });
-      stream.on("end", function () {
-        console.log("File [" + filename + "] Finished");
-      });
+          filesArray.push({
+            filename: filename.replace(/ /g, "_"),
+            encoding,
+            mimeType,
+            chunks: [],
+          });
+
+          stream.on("data", function (data) {
+            filesArray[filesArray.length - 1]["chunks"].push(data);
+          });
+
+          stream.on("limit", function () {
+            console.log(`File [${filename}] exceeds allowed size limit`);
+            failed.push(filename);
+            filesArray.pop();
+          });
+
+          stream.on("end", function () {
+            console.log("File [" + filename + "] Finished");
+          });
+        });
+        bb.on("finish", function () {
+          const dest = parseKey(destination);
+
+          let queue = filesArray.length;
+          console.log("queue  on start", queue);
+
+          filesArray.forEach((f, index) => {
+            const fName = keepOriginalName
+              ? f.filename
+              : crypto.randomUUID() + path.extname(f.filename);
+
+            s3.upload(
+              {
+                Bucket: bucketName,
+                Key: normalize(dest + "/" + fName),
+                Body: Buffer.concat(f.chunks),
+                ContentEncoding: f.encoding,
+                ContentType: f.mimeType,
+                ACL: "public-read",
+              },
+              (err, result) => {
+                if (err) throw err;
+
+                queue -= 1;
+
+                if (queue === 0) {
+                  resolve({
+                    failed,
+                    uploaded: filesArray.map((f) => f.filename),
+                  });
+                }
+              }
+            );
+          });
+        });
+        req.pipe(bb);
+      } catch (error) {
+        reject(error);
+      }
     });
-    bb.on("finish", function () {
-      filesArray.forEach((f) =>
-        s3
-          .upload({
-            Bucket: bucketName,
-            Key: f.filename,
-            Body: Buffer.concat(f.chunks),
-            ACL: "public-read",
-          })
-          .promise()
-      );
-
-      // res.status(304).send({});
-    });
-    req.pipe(bb);
   };
 
   const parseKey = (key) => normalize(getS3Key(key));
@@ -90,12 +141,12 @@ const jbfm_s3 = ({
               reject(err);
             } else {
               const contents = data.Contents;
-              console.log("C", contents);
+
               contents.forEach((content) => {
                 allKeys.push({
                   Key: content.Key,
                   Size: content.Size,
-                  lastModified: content.LastModified,
+                  LastModified: content.LastModified,
                 });
               });
 
@@ -130,32 +181,67 @@ const jbfm_s3 = ({
     return wholeData;
   };
 
-  const s3Delete = async (keysArray) =>
-    s3
-      .deleteObjects({
+  const s3delete = async (keysArray) =>
+    s3.deleteObjects(
+      {
         Bucket: bucketName,
         Delete: {
           Objects: keysArray.map((key) => {
+            console.log("deleting", key);
             return {
               Key: key,
             };
           }),
         },
-      })
-      .promise()
-      .catch(console.error);
+      },
+      (err, res) => {
+        if (err) {
+          console.error("Error while deleting object");
+          throw err;
+        }
 
-  const s3copy = async (newKeys, oldKeys) =>
-    oldKeys.forEach((oldKey, index) =>
-      s3
-        .copyObject({
-          Bucket: bucketName,
-          CopySource: bucketName + "/" + oldKey,
-          Key: parseKey(newKeys[index]),
-        })
-        .promise()
-        .catch(console.error)
+        console.log("Deleted object ", res);
+      }
     );
+
+  const s3copy = async (newKeys, oldKeys) => {
+    return new Promise((resolve, reject) => {
+      let count = oldKeys.length;
+
+      try {
+        for (const [index, val] of oldKeys.entries()) {
+          console.log("Processing object copy", val);
+          console.log("index", index);
+
+          s3.copyObject(
+            {
+              Bucket: bucketName,
+              CopySource: bucketName + "/" + val,
+              Key: parseKey(newKeys[index]),
+            },
+            (err, res) => {
+              if (err) {
+                console.error(
+                  `Error while copying object from  ${
+                    bucketName + "/" + val
+                  } to  ${parseKey(newKeys[index])}`
+                );
+                throw err;
+              }
+              console.log("object copied to ", parseKey(newKeys[index]));
+              count -= 1;
+              console.log("objects left", count);
+              if (count === 0) {
+                resolve(oldKeys);
+              }
+            }
+          );
+        }
+      } catch (error) {
+        reject(error);
+      }
+    });
+  };
 
   const rename = async (oldPath, newPath) => {
     const oldKeys = await getKeyWithSubkeys(oldPath);
@@ -164,12 +250,12 @@ const jbfm_s3 = ({
       return parseKey(newPath) + k.slice(oldKeys[0].length);
     });
 
-    s3copy(newKeys, oldKeys)
-      .then((r) => s3Delete(oldKeys).catch(console.error))
-      .catch(console.error);
+    const keysToDelete = await s3copy(newKeys, oldKeys);
+
+    await s3delete(keysToDelete);
   };
 
-  const remove = async (keys) => await s3Delete(await getKeyWithSubkeys(keys));
+  const remove = async (keys) => await s3delete(await getKeyWithSubkeys(keys));
 
   const copy = async (target, files) => await move(target, files, true);
 
@@ -180,32 +266,40 @@ const jbfm_s3 = ({
 
     const newKeys = oldKeys.map((k, ind) => {
       if (
-        !prefix ||
-        !marker ||
+        prefix === undefined ||
+        marker === undefined ||
         !k.slice(prefix.length + 1).startsWith(marker)
       ) {
-        marker = k.split("/").reverse()[0];
-        prefix = k.slice(0, k.lastIndexOf("/"));
+        marker = k.split("/").length === 1 ? k : k.split("/").reverse()[0];
+        prefix =
+          k.split("/").length === 1 ? "" : k.slice(0, k.lastIndexOf("/"));
       }
 
       return parseKey(target) + "/" + normalize(k.slice(prefix.length));
     });
+    console.log("old keys", oldKeys);
+    console.log("new keys", newKeys);
 
-    s3copy(newKeys, oldKeys)
-      .then((r) => {
-        if (keepOrigin === false) {
-          s3Delete(oldKeys).catch(console.error);
-        }
-      })
-      .catch(console.error);
+    const keysToDelete = await s3copy(newKeys, oldKeys);
+
+    if (keepOrigin === false) {
+      console.log("keys to delete", keysToDelete);
+
+      await s3delete(keysToDelete);
+    }
   };
 
   const map = async (root = bucketName, Delimiter = "", Prefix = "") => {
     const tree = new Tree(root);
-    tree.find(root).dir = true;
+    const top = tree.find(root);
+    top.dir = true;
+    top.info = {
+      mb: 0,
+      bytes: 0,
+      created: "n/a",
+    };
 
     const data = await listObjects(Prefix);
-    console.log("d", data);
 
     for (const ob of data) {
       ob.Key.split("/").reduce((parent, child) => {
@@ -217,6 +311,7 @@ const jbfm_s3 = ({
             info: {
               mb: (ob["Size"] / 1024 ** 2).toFixed(2),
               bytes: ob["Size"],
+              created: formatDate(ob["LastModified"]),
             },
           });
         }
