@@ -114,7 +114,10 @@ app.post(`${prefix}/move`, ({ query, body }, res, next) =>
 ```js
 app.post(`${prefix}/upload`, (req, res, next) =>
   jbfm_s3
-    .upload(req, res, req.query.destination, req.query.max_size) // pass http request and response
+    .upload(req, res, {
+      keepOriginalName: false, // maintains or not the original name of a file
+      overrideMaxSize: 1024 * 1024 * 5, // overrides the value from the frontend component
+    })
     .then((result) => res.status(200).send(result))
     .catch(next)
 );
